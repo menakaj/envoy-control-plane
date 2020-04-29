@@ -15,14 +15,22 @@
  *
  */
 
-module github.com/wso2/envoy-control-plane
+package main
 
-go 1.13
+import (
+	"fmt"
+	"os"
 
-require (
-	github.com/envoyproxy/go-control-plane v0.9.5
-	github.com/golang/protobuf v1.4.0
-	github.com/sirupsen/logrus v1.5.0
-	google.golang.org/grpc v1.29.1
-	google.golang.org/protobuf v1.21.0
+	server "github.com/wso2/envoy-control-plane/cmd/microgateway"
 )
+
+func main() {
+
+	var file string
+	if len(os.Args) > 1 {
+		file = os.Args[1]
+		fmt.Println(file)
+	}
+
+	server.Run()
+}
