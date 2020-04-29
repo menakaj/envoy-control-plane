@@ -1,19 +1,3 @@
-/*
- *  Copyright (c) 2020, WSO2 Inc. (http://www.wso2.org) All Rights Reserved.
- *
- *  Licensed under the Apache License, Version 2.0 (the "License");
- *  you may not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
- *
- *  http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS,
- *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
- *
- */
 package microgateway
 
 import (
@@ -31,9 +15,9 @@ import (
 
 	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	core "github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
-	endpoint "github.com/envoyproxy/go-control-plane/envoy/api/v2/endpoint"
 	listener "github.com/envoyproxy/go-control-plane/envoy/api/v2/listener"
 	v2route "github.com/envoyproxy/go-control-plane/envoy/api/v2/route"
+	envoy_config_filter_http_ext_authz_v2 "github.com/envoyproxy/go-control-plane/envoy/config/filter/http/ext_authz/v2"
 	hcm "github.com/envoyproxy/go-control-plane/envoy/config/filter/network/http_connection_manager/v2"
 	"github.com/golang/protobuf/ptypes"
 	"github.com/wso2/envoy-control-plane/internal/pkg/accesslogs"
@@ -46,7 +30,6 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/durationpb"
 
 	accesslog "github.com/envoyproxy/go-control-plane/envoy/service/accesslog/v2"
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v2"
@@ -123,7 +106,7 @@ func (cb *callbacks) OnStreamResponse(int64, *v2.DiscoveryRequest, *v2.Discovery
 	cb.Report()
 }
 func (cb *callbacks) OnFetchRequest(ctx context.Context, req *v2.DiscoveryRequest) error {
-	log.Infof("OnFetchRequest...")
+	log.Infof("OnFetchRequest...", req)
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	cb.fetches++
@@ -133,7 +116,10 @@ func (cb *callbacks) OnFetchRequest(ctx context.Context, req *v2.DiscoveryReques
 	}
 	return nil
 }
-func (cb *callbacks) OnFetchResponse(*v2.DiscoveryRequest, *v2.DiscoveryResponse) {}
+func (cb *callbacks) OnFetchResponse(req *v2.DiscoveryRequest, res *v2.DiscoveryResponse) {
+	fmt.Println(req)
+	fmt.Println(res)
+}
 
 type callbacks struct {
 	signal   chan struct{}
@@ -197,14 +183,15 @@ func RunManagementServer(ctx context.Context, server xds.Server, port uint) {
 
 	log.WithFields(log.Fields{"port": port}).Info("management server listening")
 	//log.Fatalf("", Serve(lis))
-	// go func() {
-	if err = grpcServer.Serve(lis); err != nil {
-		log.Error(err)
-	}
-	// }()
-	//<-ctx.Done()
-
-	// grpcServer.GracefulStop()
+	go func() {
+		go func() {
+			if err = grpcServer.Serve(lis); err != nil {
+				log.Error(err)
+			}
+		}()
+		<-ctx.Done()
+		grpcServer.GracefulStop()
+	}()
 }
 
 //RunManagementGateway starts an HTTP gateway to an xDS server.
@@ -266,12 +253,15 @@ func Run() {
 
 	for _, v := range slicr {
 
-		nodeId := config.GetStatusKeys()[0]
+		var nodeId string
+		if len(config.GetStatusKeys()) > 0 {
+			nodeId = config.GetStatusKeys()[0]
+		}
 
 		var clusterName = "service_bbc"
 		var remoteHost = v
 		// var sni = v
-		log.Infof(">>>>>>>>>>>>>>>>>>> creating cluster %v  with  remoteHost %v", clusterName, v)
+		log.Infof(">>>>>>>>>>>>>>>>>>> creating cluster %v  with  remoteHost %c", clusterName, v)
 
 		//c := []cache.Resource{resource.MakeCluster(resource.Ads, clusterName)}
 
@@ -285,51 +275,6 @@ func Run() {
 			},
 		}}
 
-		// 	- name: ext-authz
-		// type: STRICT_DNS
-		// http2_protocol_options: {}
-		// load_assignment:
-		//   cluster_name: ext-authz
-		//   endpoints:
-		//   - lb_endpoints:
-		//     - endpoint:
-		//         address:
-		//           socket_address:
-		//             address: host.docker.internal
-		//             port_value: 8081
-
-		cluster := &v2.Cluster{
-			Name:                 "ext-authz",
-			ConnectTimeout:       &durationpb.Duration{Seconds: 2},
-			DnsLookupFamily:      v2.Cluster_V4_ONLY,
-			ClusterDiscoveryType: &v2.Cluster_Type{v2.Cluster_LOGICAL_DNS},
-			LoadAssignment: &v2.ClusterLoadAssignment{
-				ClusterName: "ext-authz",
-				Endpoints: []*endpoint.LocalityLbEndpoints{
-					&endpoint.LocalityLbEndpoints{
-						LbEndpoints: []*endpoint.LbEndpoint{
-							&endpoint.LbEndpoint{
-								HostIdentifier: &endpoint.LbEndpoint_Endpoint{
-									Endpoint: &endpoint.Endpoint{
-										Address: &core.Address{
-											Address: &core.Address_SocketAddress{
-												SocketAddress: &core.SocketAddress{
-													Address: "host.docker.internal",
-													PortSpecifier: &core.SocketAddress_PortValue{
-														PortValue: 8008,
-													},
-												},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		}
-
 		c := []types.Resource{
 			&v2.Cluster{
 				Name:                 clusterName,
@@ -339,7 +284,24 @@ func Run() {
 				LbPolicy:             v2.Cluster_ROUND_ROBIN,
 				Hosts:                []*core.Address{h},
 			},
-			cluster,
+			&v2.Cluster{
+				Name:                 "ext-authz",
+				ConnectTimeout:       ptypes.DurationProto(10 * time.Second),
+				ClusterDiscoveryType: &v2.Cluster_Type{Type: v2.Cluster_LOGICAL_DNS},
+				DnsLookupFamily:      v2.Cluster_V4_ONLY,
+				Hosts: []*core.Address{
+					{
+						Address: &core.Address_SocketAddress{
+							SocketAddress: &core.SocketAddress{
+								Address: "host.docker.internal",
+								PortSpecifier: &core.SocketAddress_PortValue{
+									PortValue: 8008,
+								},
+							},
+						},
+					},
+				},
+			},
 		}
 
 		// =================================================================================
@@ -349,13 +311,15 @@ func Run() {
 		var virtualHostName = "local_service"
 		var routeConfigName = "local_route"
 
+		fmt.Println(c)
+
 		log.Infof(">>>>>>>>>>>>>>>>>>> creating listener " + listenerName)
 
 		v := v2route.VirtualHost{
 			Name:    virtualHostName,
 			Domains: []string{"*"},
 			Routes: []*v2route.Route{
-				&v2route.Route{
+				{
 					Match: &v2route.RouteMatch{
 						PathSpecifier: &v2route.RouteMatch_Prefix{
 							Prefix: targetRegex,
@@ -376,7 +340,27 @@ func Run() {
 			},
 		}
 
-		// extAuthzConfig :=
+		extAuthzConfig := &envoy_config_filter_http_ext_authz_v2.ExtAuthz{
+			WithRequestBody: &envoy_config_filter_http_ext_authz_v2.BufferSettings{
+				MaxRequestBytes:     1024,
+				AllowPartialMessage: false,
+			},
+			Services: &envoy_config_filter_http_ext_authz_v2.ExtAuthz_GrpcService{
+				GrpcService: &core.GrpcService{
+					TargetSpecifier: &core.GrpcService_EnvoyGrpc_{
+						EnvoyGrpc: &core.GrpcService_EnvoyGrpc{
+							ClusterName: "ext-authz",
+						},
+					},
+				},
+			},
+		}
+
+		ext, err2 := ptypes.MarshalAny(extAuthzConfig)
+		if err2 != nil {
+			panic(err2)
+		}
+		fmt.Println(ext)
 
 		manager := &hcm.HttpConnectionManager{
 			CodecType:  hcm.HttpConnectionManager_AUTO,
@@ -388,7 +372,13 @@ func Run() {
 				},
 			},
 			HttpFilters: []*hcm.HttpFilter{
-				&hcm.HttpFilter{
+				{
+					Name: "envoy.filters.http.ext_authz",
+					ConfigType: &hcm.HttpFilter_TypedConfig{
+						TypedConfig: ext,
+					},
+				},
+				{
 					Name: wellknown.Router,
 				},
 			},
