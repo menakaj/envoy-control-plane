@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"sync/atomic"
@@ -15,18 +14,12 @@ import (
 
 	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
 	core "github.com/envoyproxy/go-control-plane/envoy/api/v2/core"
-	listener "github.com/envoyproxy/go-control-plane/envoy/api/v2/listener"
-	v2route "github.com/envoyproxy/go-control-plane/envoy/api/v2/route"
-	envoy_config_filter_http_ext_authz_v2 "github.com/envoyproxy/go-control-plane/envoy/config/filter/http/ext_authz/v2"
-	hcm "github.com/envoyproxy/go-control-plane/envoy/config/filter/network/http_connection_manager/v2"
-	"github.com/golang/protobuf/ptypes"
 	"github.com/wso2/envoy-control-plane/internal/pkg/accesslogs"
 	myals "github.com/wso2/envoy-control-plane/internal/pkg/accesslogs"
 
-	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
-	cache "github.com/envoyproxy/go-control-plane/pkg/cache/v2"
+	"github.com/envoyproxy/go-control-plane/pkg/cache/v2"
 	xds "github.com/envoyproxy/go-control-plane/pkg/server/v2"
-	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
+	oasParser "github.com/wso2/envoy-control-plane/internal/pkg/configurator"
 
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -151,14 +144,14 @@ func RunAccessLogServer(ctx context.Context, als *myals.AccessLogService, port u
 	accesslog.RegisterAccessLogServiceServer(grpcServer, als)
 	log.WithFields(log.Fields{"port": port}).Info("access log server listening")
 	//log.Fatalf("", Serve(lis))
-	// go func() {
-	if err = grpcServer.Serve(lis); err != nil {
-		log.Error(err)
-	}
-	// }()
-	// <-ctx.Done()
+	go func() {
+		if err = grpcServer.Serve(lis); err != nil {
+			log.Error(err)
+		}
+	}()
+	<-ctx.Done()
 
-	//grpcServer.GracefulStop()
+	grpcServer.GracefulStop()
 }
 
 const grpcMaxConcurrentStreams = 1000000
@@ -194,21 +187,23 @@ func RunManagementServer(ctx context.Context, server xds.Server, port uint) {
 	}()
 }
 
-//RunManagementGateway starts an HTTP gateway to an xDS server.
-func RunManagementGateway(ctx context.Context, srv xds.Server, port uint) {
-	log.WithFields(log.Fields{"port": port}).Info("gateway listening HTTP/1.1")
-	server := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: HTTPGateway{Server: srv}}
-	go func() {
-		if err := server.ListenAndServe(); err != nil {
-			log.Error(err)
-		}
-	}()
-}
+// //RunManagementGateway starts an HTTP gateway to an xDS server.
+// func RunManagementGateway(ctx context.Context, srv xds.Server, port uint) {
+// 	log.WithFields(log.Fields{"port": port}).Info("gateway listening HTTP/1.1")
+// 	server := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: HTTPGateway{Server: srv}}
+// 	go func() {
+// 		if err := server.ListenAndServe(); err != nil {
+// 			log.Error(err)
+// 		}
+// 	}()
+// }
 
 // Run ...
 func Run() {
 	sig := make(chan os.Signal)
 	signal.Notify(sig, os.Interrupt)
+
+	fmt.Println(os.Args)
 
 	flag.Parse()
 	if debug {
@@ -240,7 +235,7 @@ func Run() {
 
 	// start the xDS server
 	go RunManagementServer(ctx, srv, port)
-	go RunManagementGateway(ctx, srv, gatewayPort)
+	// go RunManagementGateway(ctx, srv, gatewayPort)
 
 	<-signal
 
@@ -265,153 +260,9 @@ func Run() {
 
 		//c := []cache.Resource{resource.MakeCluster(resource.Ads, clusterName)}
 
-		h := &core.Address{Address: &core.Address_SocketAddress{
-			SocketAddress: &core.SocketAddress{
-				Address:  remoteHost,
-				Protocol: core.SocketAddress_TCP,
-				PortSpecifier: &core.SocketAddress_PortValue{
-					PortValue: uint32(3001),
-				},
-			},
-		}}
+		_, c, l, _ := oasParser.GetConfigs(remoteHost, clusterName)
 
-		c := []types.Resource{
-			&v2.Cluster{
-				Name:                 clusterName,
-				ConnectTimeout:       ptypes.DurationProto(2 * time.Second),
-				ClusterDiscoveryType: &v2.Cluster_Type{Type: v2.Cluster_LOGICAL_DNS},
-				DnsLookupFamily:      v2.Cluster_V4_ONLY,
-				LbPolicy:             v2.Cluster_ROUND_ROBIN,
-				Hosts:                []*core.Address{h},
-			},
-			&v2.Cluster{
-				Name:                 "ext-authz",
-				ConnectTimeout:       ptypes.DurationProto(10 * time.Second),
-				ClusterDiscoveryType: &v2.Cluster_Type{Type: v2.Cluster_LOGICAL_DNS},
-				DnsLookupFamily:      v2.Cluster_V4_ONLY,
-				Hosts: []*core.Address{
-					{
-						Address: &core.Address_SocketAddress{
-							SocketAddress: &core.SocketAddress{
-								Address: "host.docker.internal",
-								PortSpecifier: &core.SocketAddress_PortValue{
-									PortValue: 8008,
-								},
-							},
-						},
-					},
-				},
-			},
-		}
-
-		// =================================================================================
-		var listenerName = "listener_0"
-		var targetHost = v
-		var targetRegex = "/"
-		var virtualHostName = "local_service"
-		var routeConfigName = "local_route"
-
-		fmt.Println(c)
-
-		log.Infof(">>>>>>>>>>>>>>>>>>> creating listener " + listenerName)
-
-		v := v2route.VirtualHost{
-			Name:    virtualHostName,
-			Domains: []string{"*"},
-			Routes: []*v2route.Route{
-				{
-					Match: &v2route.RouteMatch{
-						PathSpecifier: &v2route.RouteMatch_Prefix{
-							Prefix: targetRegex,
-						},
-					},
-					Action: &v2route.Route_Route{
-						Route: &v2route.RouteAction{
-							HostRewriteSpecifier: &v2route.RouteAction_HostRewrite{
-								HostRewrite: targetHost,
-							},
-							ClusterSpecifier: &v2route.RouteAction_Cluster{
-								Cluster: clusterName,
-							},
-							PrefixRewrite: "/pet",
-						},
-					},
-				},
-			},
-		}
-
-		extAuthzConfig := &envoy_config_filter_http_ext_authz_v2.ExtAuthz{
-			WithRequestBody: &envoy_config_filter_http_ext_authz_v2.BufferSettings{
-				MaxRequestBytes:     1024,
-				AllowPartialMessage: false,
-			},
-			Services: &envoy_config_filter_http_ext_authz_v2.ExtAuthz_GrpcService{
-				GrpcService: &core.GrpcService{
-					TargetSpecifier: &core.GrpcService_EnvoyGrpc_{
-						EnvoyGrpc: &core.GrpcService_EnvoyGrpc{
-							ClusterName: "ext-authz",
-						},
-					},
-				},
-			},
-		}
-
-		ext, err2 := ptypes.MarshalAny(extAuthzConfig)
-		if err2 != nil {
-			panic(err2)
-		}
-		fmt.Println(ext)
-
-		manager := &hcm.HttpConnectionManager{
-			CodecType:  hcm.HttpConnectionManager_AUTO,
-			StatPrefix: "ingress_http",
-			RouteSpecifier: &hcm.HttpConnectionManager_RouteConfig{
-				RouteConfig: &v2.RouteConfiguration{
-					Name:         routeConfigName,
-					VirtualHosts: []*v2route.VirtualHost{&v},
-				},
-			},
-			HttpFilters: []*hcm.HttpFilter{
-				{
-					Name: "envoy.filters.http.ext_authz",
-					ConfigType: &hcm.HttpFilter_TypedConfig{
-						TypedConfig: ext,
-					},
-				},
-				{
-					Name: wellknown.Router,
-				},
-			},
-		}
-
-		pbst, err := ptypes.MarshalAny(manager)
-		if err != nil {
-			panic(err)
-		}
-
-		var l = []types.Resource{
-			&v2.Listener{
-				Name: listenerName,
-				Address: &core.Address{
-					Address: &core.Address_SocketAddress{
-						SocketAddress: &core.SocketAddress{
-							Protocol: core.SocketAddress_TCP,
-							Address:  localhost,
-							PortSpecifier: &core.SocketAddress_PortValue{
-								PortValue: 10000,
-							},
-						},
-					},
-				},
-				FilterChains: []*listener.FilterChain{{
-					Filters: []*listener.Filter{{
-						Name: wellknown.HTTPConnectionManager,
-						ConfigType: &listener.Filter_TypedConfig{
-							TypedConfig: pbst,
-						},
-					}},
-				}},
-			}}
+		//log.Println(e, r, c, l)
 
 		// =================================================================================
 
@@ -427,7 +278,6 @@ func Run() {
 		time.Sleep(2 * time.Second)
 
 	}
-
 	<-sig
 
 }
