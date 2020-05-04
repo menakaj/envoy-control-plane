@@ -14,6 +14,6 @@
  *  limitations under the License.
  *
  */
- 
-package server
+package api
 
+type ConfigService struct{}

@@ -1,9 +1,27 @@
-package microgateway
+/*
+ *  Copyright (c) 2020, WSO2 Inc. (http://www.wso2.org) All Rights Reserved.
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ */
+package mgw
 
 import (
 	"context"
 	"flag"
 	"fmt"
+	apiserver "github.com/wso2/envoy-control-plane/internal/pkg/api"
+	mgwconfig "github.com/wso2/envoy-control-plane/internal/pkg/config"
 	"net"
 	"os"
 	"os/signal"
@@ -17,9 +35,9 @@ import (
 	"github.com/wso2/envoy-control-plane/internal/pkg/accesslogs"
 	myals "github.com/wso2/envoy-control-plane/internal/pkg/accesslogs"
 
-	"github.com/envoyproxy/go-control-plane/pkg/cache/v2"
+	cachev2 "github.com/envoyproxy/go-control-plane/pkg/cache/v2"
 	xds "github.com/envoyproxy/go-control-plane/pkg/server/v2"
-	oasParser "github.com/wso2/envoy-control-plane/internal/pkg/configurator"
+	oasParser "github.com/wso2/envoy-control-plane/internal/pkg/oasparser"
 
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -42,7 +60,7 @@ var (
 
 	version int32
 
-	config cache.SnapshotCache
+	cache cachev2.SnapshotCache
 
 	strSlice = []string{"www.bbc.com", "www.yahoo.com", "blog.salrashid.me"}
 )
@@ -198,13 +216,10 @@ func RunManagementServer(ctx context.Context, server xds.Server, port uint) {
 // 	}()
 // }
 
-// Run ...
-func Run() {
+// Run the management grpc server.
+func Run(conf *mgwconfig.Config) {
 	sig := make(chan os.Signal)
 	signal.Notify(sig, os.Interrupt)
-
-	fmt.Println(os.Args)
-
 	flag.Parse()
 	if debug {
 		log.SetLevel(log.DebugLevel)
@@ -219,9 +234,9 @@ func Run() {
 		fetches:  0,
 		requests: 0,
 	}
-	config = cache.NewSnapshotCache(mode == Ads, Hasher{}, nil)
+	cache = cachev2.NewSnapshotCache(mode != Ads, Hasher{}, log.New())
 
-	srv := xds.NewServer(ctx, config, cb)
+	srv := xds.NewServer(ctx, cache, cb)
 
 	als := &accesslogs.AccessLogService{}
 	als = &myals.AccessLogService{}
@@ -235,6 +250,7 @@ func Run() {
 
 	// start the xDS server
 	go RunManagementServer(ctx, srv, port)
+	go apiserver.Start(conf)
 	// go RunManagementGateway(ctx, srv, gatewayPort)
 
 	<-signal
@@ -246,38 +262,40 @@ func Run() {
 
 	slicr := []string{"host.docker.internal", "host.docker.internal", "host.docker.internal"}
 
-	for _, v := range slicr {
+	go func() {
+		for _, v := range slicr {
 
-		var nodeId string
-		if len(config.GetStatusKeys()) > 0 {
-			nodeId = config.GetStatusKeys()[0]
+			var nodeId string
+			if len(cache.GetStatusKeys()) > 0 {
+				nodeId = cache.GetStatusKeys()[0]
+			}
+
+			var clusterName = "service_google"
+			var remoteHost = v
+			// var sni = v
+			log.Infof(">>>>>>>>>>>>>>>>>>> creating cluster %v  with  remoteHost %c", clusterName, v)
+
+			//_, c, l, _ := oasParser.GetConfigs(oas file)
+			endpoints, clusters, listeners, routes := oasParser.GetConfigs(remoteHost, clusterName)
+
+			//log.Println(e, r, c, l)
+
+			// =================================================================================
+
+			atomic.AddInt32(&version, 1)
+			log.Infof(">>>>>>>>>>>>>>>>>>> creating snapshot Version " + fmt.Sprint(version))
+			snap := cachev2.NewSnapshot(fmt.Sprint(version), endpoints, clusters, routes, listeners, nil)
+
+			cache.SetSnapshot(nodeId, snap)
+
+			//reader := bufio.NewReader(os.Stdin)
+			//_, _ = reader.ReadString('\n')
+
+			time.Sleep(2 * time.Second)
+
 		}
+	}()
 
-		var clusterName = "service_bbc"
-		var remoteHost = v
-		// var sni = v
-		log.Infof(">>>>>>>>>>>>>>>>>>> creating cluster %v  with  remoteHost %c", clusterName, v)
-
-		//c := []cache.Resource{resource.MakeCluster(resource.Ads, clusterName)}
-
-		_, c, l, _ := oasParser.GetConfigs(remoteHost, clusterName)
-
-		//log.Println(e, r, c, l)
-
-		// =================================================================================
-
-		atomic.AddInt32(&version, 1)
-		log.Infof(">>>>>>>>>>>>>>>>>>> creating snapshot Version " + fmt.Sprint(version))
-		snap := cache.NewSnapshot(fmt.Sprint(version), nil, c, nil, l, nil)
-
-		config.SetSnapshot(nodeId, snap)
-
-		//reader := bufio.NewReader(os.Stdin)
-		//_, _ = reader.ReadString('\n')
-
-		time.Sleep(2 * time.Second)
-
-	}
 	<-sig
 
 }

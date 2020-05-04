@@ -15,21 +15,25 @@
  *
  */
 
-package main
+package api
 
-import (
-	"fmt"
-	"github.com/wso2/envoy-control-plane/cmd/microgateway"
-	"os"
-)
+import "net/http"
 
-func main() {
+//This package contains the REST API for the control plane configurations
 
-	var file string
-	if len(os.Args) > 1 {
-		file = os.Args[1]
-		fmt.Println(file)
-	}
+type RESTService struct{}
 
-	microgateway.StartMicroGateway(os.Args)
+// Deploy API in microgateway
+func (rest *RESTService) ApiPOST(w http.ResponseWriter, r *http.Request) {
+
+}
+
+// Update deployed api
+func (rest *RESTService) ApiPUT(w http.ResponseWriter, r *http.Request) {
+
+}
+
+// Remove a deployed api
+func (rest *RESTService) ApiDELETE(w http.ResponseWriter, r *http.Request) {
+
 }

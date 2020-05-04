@@ -15,7 +15,7 @@
  *
  */
 
-package microgateway
+package mgw
 
 import (
 	"bytes"
