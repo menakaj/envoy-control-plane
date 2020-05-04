@@ -92,17 +92,17 @@ func (logger logger) Errorf(format string, args ...interface{}) {
 func (cb *callbacks) Report() {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
-	log.WithFields(log.Fields{"fetches": cb.fetches, "requests": cb.requests}).Info("cb.Report()  callbacks")
+	//log.WithFields(log.Fields{"fetches": cb.fetches, "requests": cb.requests}).Info("cb.Report()  callbacks")
 }
 func (cb *callbacks) OnStreamOpen(ctx context.Context, id int64, typ string) error {
-	log.Infof("OnStreamOpen %d open for %s", id, typ)
+	//log.Infof("OnStreamOpen %d open for %s", id, typ)
 	return nil
 }
 func (cb *callbacks) OnStreamClosed(id int64) {
-	log.Infof("OnStreamClosed %d closed", id)
+	//log.Infof("OnStreamClosed %d closed", id)
 }
 func (cb *callbacks) OnStreamRequest(int64, *v2.DiscoveryRequest) error {
-	log.Infof("OnStreamRequest")
+	//log.Infof("OnStreamRequest")
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	cb.requests++
@@ -113,11 +113,11 @@ func (cb *callbacks) OnStreamRequest(int64, *v2.DiscoveryRequest) error {
 	return nil
 }
 func (cb *callbacks) OnStreamResponse(int64, *v2.DiscoveryRequest, *v2.DiscoveryResponse) {
-	log.Infof("OnStreamResponse...")
+	//log.Infof("OnStreamResponse...")
 	cb.Report()
 }
 func (cb *callbacks) OnFetchRequest(ctx context.Context, req *v2.DiscoveryRequest) error {
-	log.Infof("OnFetchRequest...", req)
+	//log.Infof("OnFetchRequest...", req)
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	cb.fetches++
@@ -271,12 +271,12 @@ func Run(conf *mgwconfig.Config) {
 			}
 
 			var clusterName = "service_google"
-			var remoteHost = v
+
 			// var sni = v
 			log.Infof(">>>>>>>>>>>>>>>>>>> creating cluster %v  with  remoteHost %c", clusterName, v)
 
 			//_, c, l, _ := oasParser.GetConfigs(oas file)
-			endpoints, clusters, listeners, routes := oasParser.GetConfigs(remoteHost, clusterName)
+			listeners, clusters, routes, endpoints := oasParser.GetProductionSources()
 
 			//log.Println(e, r, c, l)
 
